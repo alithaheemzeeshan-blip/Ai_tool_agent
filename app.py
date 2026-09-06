@@ -98,7 +98,6 @@ def web_search(query: str) -> str:
         if not results:
             return "No web results found for this query."
         
-        # Format cleanly as plain text lines to avoid JSON syntax errors
         clean_snippets = []
         for r in results:
             clean_snippets.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
@@ -162,6 +161,7 @@ tools_schema = [
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Reset corrupted state structures
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
@@ -181,26 +181,30 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Payload Sanitization Engine
+# Message Sanitizer ensuring Groq API compliance
 def prepare_messages_for_api(messages):
     cleaned = []
     for m in messages:
         if not isinstance(m, dict):
             continue
         
-        msg_copy = {"role": m["role"]}
+        role = m.get("role")
+        if role not in ["user", "assistant", "tool", "system"]:
+            continue
+
+        msg_copy = {"role": role}
         
-        # Always provide string content
+        # Ensure content is always string or empty string
         msg_copy["content"] = str(m.get("content") or "")
-            
-        # Preserve Tool Calls Structure for Assistant Role
-        if m["role"] == "assistant" and "tool_calls" in m and m["tool_calls"]:
+
+        # Pass through tool_calls for assistant
+        if role == "assistant" and "tool_calls" in m and m["tool_calls"]:
             msg_copy["tool_calls"] = m["tool_calls"]
-            
-        # Preserve Tool Output Attributes for Tool Role
-        if m["role"] == "tool":
+
+        # Pass through tool execution metadata for tool role
+        if role == "tool":
             msg_copy["tool_call_id"] = str(m.get("tool_call_id", ""))
-            
+
         cleaned.append(msg_copy)
     return cleaned
 
@@ -214,12 +218,18 @@ if prompt := st.chat_input("Assign a task to your agent..."):
         with st.spinner("Processing request..."):
             api_messages = prepare_messages_for_api(st.session_state.messages)
             
-            response = client.chat.completions.create(
-                model=ACTIVE_MODEL,
-                messages=api_messages,
-                tools=tools_schema,
-                tool_choice="auto",
-            )
+            try:
+                response = client.chat.completions.create(
+                    model=ACTIVE_MODEL,
+                    messages=api_messages,
+                    tools=tools_schema,
+                    tool_choice="auto",
+                )
+            except Exception:
+                response = client.chat.completions.create(
+                    model=ACTIVE_MODEL,
+                    messages=api_messages,
+                )
 
             response_message = response.choices[0].message
             tool_calls = getattr(response_message, "tool_calls", None)
@@ -264,20 +274,19 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                         "content": str(function_response),
                     })
 
-                # Follow-Up Call with full tool execution history
                 api_messages = prepare_messages_for_api(st.session_state.messages)
                 second_response = client.chat.completions.create(
                     model=ACTIVE_MODEL,
                     messages=api_messages,
                 )
-                final_answer = second_response.choices[0].message.content or "Completed task."
+                final_answer = second_response.choices[0].message.content or "Task completed."
                 st.markdown(final_answer)
                 st.session_state.messages.append({"role": "assistant", "content": final_answer})
             else:
                 final_answer = response_message.content
                 st.markdown(final_answer)
 
-    # Auto-Scroll View
+    # Auto-Scroll
     components.html(
         """
         <script>
