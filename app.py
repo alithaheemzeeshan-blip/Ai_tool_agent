@@ -1,8 +1,9 @@
 import json
 import re
+import time
 import streamlit as st
 import streamlit.components.v1 as components
-from groq import Groq
+from groq import Groq, RateLimitError
 from duckduckgo_search import DDGS
 import yfinance as yf
 
@@ -64,23 +65,23 @@ with st.sidebar:
 
 client = Groq(api_key=api_key)
 
-# Dynamic active model retriever
+# Dynamic active model retriever prioritizing high-RPM 8B model
 @st.cache_data(ttl=1800)
 def get_active_model(key_str):
     try:
         models = client.models.list().data
         active_ids = [m.id for m in models if "whisper" not in m.id and "guard" not in m.id]
         priority = [
+            "llama-3.1-8b-instant",     # High rate limits for agent loops
             "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
             "mixtral-8x7b-32768"
         ]
         for p in priority:
             if p in active_ids:
                 return p
-        return active_ids[0] if active_ids else "llama-3.3-70b-versatile"
+        return active_ids[0] if active_ids else "llama-3.1-8b-instant"
     except Exception:
-        return "llama-3.3-70b-versatile"
+        return "llama-3.1-8b-instant"
 
 ACTIVE_MODEL = get_active_model(api_key)
 
@@ -94,7 +95,8 @@ def check_inventory(item_name: str) -> str:
     return f"Stock for {item_name}: {count} units available."
 
 def web_search(query: str) -> str:
-    """Performs web search with yfinance fallback for stock tickers and query sanitization."""
+    """Performs web search with query sanitization, fallbacks, and yfinance support."""
+    # Stock ticker fallback
     ticker_match = re.search(r'\b([A-Z]{1,5})\b', query)
     if any(k in query.lower() for k in ["stock", "price", "quote", "market cap"]):
         if ticker_match:
@@ -108,25 +110,28 @@ def web_search(query: str) -> str:
             except Exception:
                 pass
 
-    clean_query = query.replace("today", "").replace("stock price", "stock news").strip()
-    backends = ["auto", "html", "lite"]
+    # Extract core search keywords
+    clean_query = re.sub(r"(?i)\b(today'?s|price of|tell me|what is|search the web for|in pkr)\b", "", query)
+    clean_query = " ".join(clean_query.split()).strip()
     
-    for backend in backends:
-        try:
-            results = DDGS().text(
-                keywords=clean_query, 
-                max_results=3, 
-                backend=backend
-            )
-            if results:
-                clean_snippets = [
-                    f"Title: {r.get('title')}\nSnippet: {r.get('body')}" 
-                    for r in results
-                ]
-                return "\n\n".join(clean_snippets)
-        except Exception:
+    query_attempts = [clean_query, query, "gold rate pakistan 24k"]
+    backends = ["auto", "html", "lite"]
+
+    for q in query_attempts:
+        if not q:
             continue
-            
+        for backend in backends:
+            try:
+                results = DDGS().text(keywords=q, max_results=3, backend=backend)
+                if results:
+                    clean_snippets = [
+                        f"Title: {r.get('title')}\nSnippet: {r.get('body')}" 
+                        for r in results
+                    ]
+                    return "\n\n".join(clean_snippets)
+            except Exception:
+                continue
+
     return f"No web results found for query: '{query}'."
 
 available_tools = {
@@ -204,7 +209,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Message Builder enforcing valid tool-calling history chains
+# Message Builder for API Payload Compliance
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
@@ -245,7 +250,7 @@ def prepare_messages_for_api(messages):
         cleaned.append(msg_copy)
     return cleaned
 
-# Fallback Payload Builder (Purger for non-tool completion requests)
+# Fallback Message Builder (Pure Conversational History)
 def prepare_fallback_messages(messages):
     fallback_cleaned = []
     for m in messages:
@@ -261,7 +266,26 @@ def prepare_fallback_messages(messages):
                 })
     return fallback_cleaned
 
-# 5. User Interaction & Execution Loop
+# Robust API Request Handler with Rate Limit Retry Loop
+def execute_completion_with_retry(client_obj, model, messages, tools=None):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            kwargs = {"model": model, "messages": messages}
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+            return client_obj.chat.completions.create(**kwargs)
+        except RateLimitError:
+            if attempt < max_retries - 1:
+                st.warning(f"⚠️ Groq Rate Limit reached. Retrying in 8 seconds (Attempt {attempt + 1}/{max_retries})...")
+                time.sleep(8)
+            else:
+                raise
+        except Exception:
+            raise
+
+# 5. User Interaction & Multi-Turn Agent Loop
 if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
@@ -274,18 +298,14 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                 api_messages = prepare_messages_for_api(st.session_state.messages)
                 
                 try:
-                    response = client.chat.completions.create(
-                        model=ACTIVE_MODEL,
-                        messages=api_messages,
-                        tools=tools_schema,
-                        tool_choice="auto",
+                    response = execute_completion_with_retry(
+                        client, ACTIVE_MODEL, api_messages, tools=tools_schema
                     )
                 except Exception:
-                    # Fallback cleanly strips tool payloads if tool call fails
+                    # Clean fallback stripping tool state
                     fallback_msgs = prepare_fallback_messages(st.session_state.messages)
-                    response = client.chat.completions.create(
-                        model=ACTIVE_MODEL,
-                        messages=fallback_msgs,
+                    response = execute_completion_with_retry(
+                        client, ACTIVE_MODEL, fallback_msgs
                     )
 
                 response_message = response.choices[0].message
