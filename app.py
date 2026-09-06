@@ -204,7 +204,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Message Builder for Tool-Calling Requests
+# Strict Message Sanitizer for Groq API
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
@@ -235,31 +235,33 @@ def prepare_messages_for_api(messages):
                 if m.get("content"):
                     msg_copy["content"] = str(m["content"])
             else:
-                msg_copy["content"] = str(m.get("content") or "")
+                msg_copy["content"] = str(m.get("content") or "Processing request...")
 
         elif role == "tool":
-            msg_copy["content"] = str(m.get("content") or "")
+            msg_copy["content"] = str(m.get("content") or "Tool completed.")
             msg_copy["tool_call_id"] = str(m.get("tool_call_id", ""))
             msg_copy["name"] = str(m.get("name", ""))
 
         cleaned.append(msg_copy)
     return cleaned
 
-# Pure Text Fallback Builder (Completely Strips Tool Fields)
+# Fallback Payload Builder (Pure Text-Only Mode)
 def prepare_fallback_messages(messages):
     fallback_cleaned = []
     for m in messages:
         if not isinstance(m, dict):
             continue
         role = m.get("role")
-        if role in ["user", "assistant"] and m.get("content"):
-            fallback_cleaned.append({
-                "role": role,
-                "content": str(m["content"])
-            })
+        if role in ["user", "assistant"]:
+            content_str = str(m.get("content") or "")
+            if content_str.strip():
+                fallback_cleaned.append({
+                    "role": role,
+                    "content": content_str
+                })
     return fallback_cleaned
 
-# 5. User Interaction & Tool Execution Loop
+# 5. User Interaction & Multi-Turn Tool Loop
 if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
@@ -279,7 +281,7 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                         tool_choice="auto",
                     )
                 except Exception:
-                    # Clean fallback stripping all tool structures
+                    # Pure text fallback if tool schema completion fails
                     fallback_msgs = prepare_fallback_messages(st.session_state.messages)
                     response = client.chat.completions.create(
                         model=ACTIVE_MODEL,
@@ -313,6 +315,7 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                     st.markdown(final_answer)
                     break
 
+                # Execute Tools Safely
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
@@ -320,8 +323,11 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                     with st.status(f"🛠️ Executing Tool: `{function_name}`", expanded=True) as status:
                         st.write("**Parameters:**", function_args)
                         
-                        function_to_call = available_tools[function_name]
-                        function_response = function_to_call(**function_args)
+                        try:
+                            function_to_call = available_tools[function_name]
+                            function_response = function_to_call(**function_args)
+                        except Exception as e:
+                            function_response = f"Tool execution error: {str(e)}"
                         
                         st.write("**Output:**", function_response)
                         status.update(label=f"✅ Tool `{function_name}` finished", state="complete", expanded=False)
