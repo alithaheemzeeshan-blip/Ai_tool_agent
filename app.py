@@ -204,7 +204,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Message Builder for Groq API payload compliance
+# Strict Message Builder for Tool-Calling Requests
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
@@ -245,15 +245,18 @@ def prepare_messages_for_api(messages):
         cleaned.append(msg_copy)
     return cleaned
 
-# Helper to generate a clean text-only payload for fallback completion
+# Pure Text Fallback Builder (Completely Strips Tool Fields)
 def prepare_fallback_messages(messages):
     fallback_cleaned = []
-    for m in prepare_messages_for_api(messages):
-        # Exclude tool messages that cause errors when tools parameter is omitted
-        if m.get("role") == "tool":
+    for m in messages:
+        if not isinstance(m, dict):
             continue
-        msg_copy = {"role": m["role"], "content": m.get("content", "") or "Processing request..."}
-        fallback_cleaned.append(msg_copy)
+        role = m.get("role")
+        if role in ["user", "assistant"] and m.get("content"):
+            fallback_cleaned.append({
+                "role": role,
+                "content": str(m["content"])
+            })
     return fallback_cleaned
 
 # 5. User Interaction & Tool Execution Loop
@@ -276,7 +279,7 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                         tool_choice="auto",
                     )
                 except Exception:
-                    # Clean fallback payload stripping tool roles and tool_calls
+                    # Clean fallback stripping all tool structures
                     fallback_msgs = prepare_fallback_messages(st.session_state.messages)
                     response = client.chat.completions.create(
                         model=ACTIVE_MODEL,
