@@ -95,10 +95,12 @@ def check_inventory(item_name: str) -> str:
     return f"Stock for {item_name}: {count} units available."
 
 def web_search(query: str) -> str:
-    """Performs targeted web search with domain filtering and yfinance support."""
+    """Performs web search with yfinance fallback, query transformations, and domain filtering."""
+    q_lower = query.lower()
+    
     # 1. Stock ticker fallback
     ticker_match = re.search(r'\b([A-Z]{1,5})\b', query)
-    if any(k in query.lower() for k in ["stock", "quote", "market cap"]):
+    if any(k in q_lower for k in ["stock", "quote", "market cap"]):
         if ticker_match:
             symbol = ticker_match.group(1).upper()
             try:
@@ -110,12 +112,12 @@ def web_search(query: str) -> str:
             except Exception:
                 pass
 
-    # 2. Targeted query transformation for commodity queries
-    q_lower = query.lower()
+    # 2. Extract core search terms & handle commodity queries specifically
     if "gold" in q_lower:
-        search_term = "gold rate pakistan 24k tola per gram price"
+        search_term = "gold rate pakistan 24k"
     else:
-        search_term = re.sub(r"(?i)\b(today'?s|price of|tell me|what is|search the web for)\b", "", query)
+        # Strip generic conversational words that block scrapers
+        search_term = re.sub(r"(?i)\b(today'?s|price of|tell me|what is|search the web for|in pkr|1 tola)\b", "", query)
         search_term = " ".join(search_term.split()).strip()
 
     backends = ["auto", "html", "lite"]
@@ -128,7 +130,7 @@ def web_search(query: str) -> str:
                 for r in results:
                     title = r.get('title', '')
                     body = r.get('body', '')
-                    # Filter out irrelevant domain aggregators matching the 'price' prefix
+                    # Filter out non-relevant commercial domain aggregators
                     if not any(domain in title.lower() for domain in ["priceline", "price.com", "price industries"]):
                         clean_snippets.append(f"Title: {title}\nSnippet: {body}")
                 if clean_snippets:
