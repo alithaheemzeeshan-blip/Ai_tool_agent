@@ -1,8 +1,10 @@
 import json
+import re
 import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
 from duckduckgo_search import DDGS
+import yfinance as yf
 
 # 1. Page Configuration & Custom Styling
 st.set_page_config(page_title="AI Agent Studio", page_icon="⚡", layout="wide")
@@ -92,13 +94,29 @@ def check_inventory(item_name: str) -> str:
     return f"Stock for {item_name}: {count} units available."
 
 def web_search(query: str) -> str:
-    """Performs a robust live web search using backend fallbacks."""
+    """Performs web search with yfinance fallback for stock tickers and query sanitization."""
+    # Check if query is asking for stock prices (e.g., AAPL, TSLA, MSFT)
+    ticker_match = re.search(r'\b([A-Z]{1,5})\b', query)
+    if any(k in query.lower() for k in ["stock", "price", "quote", "market cap"]):
+        if ticker_match:
+            symbol = ticker_match.group(1).upper()
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.fast_info
+                last_price = info.get('lastPrice', None)
+                if last_price:
+                    return f"Stock Symbol: {symbol}\nCurrent Price: ${last_price:.2f}"
+            except Exception:
+                pass
+
+    # Sanitize financial terms that trigger DuckDuckGo widget blocks
+    clean_query = query.replace("today", "").replace("stock price", "stock news").strip()
     backends = ["auto", "html", "lite"]
     
     for backend in backends:
         try:
             results = DDGS().text(
-                keywords=query, 
+                keywords=clean_query, 
                 max_results=3, 
                 backend=backend
             )
@@ -111,7 +129,7 @@ def web_search(query: str) -> str:
         except Exception:
             continue
             
-    return "No web results found for this query."
+    return f"No web results found for query: '{query}'."
 
 available_tools = {
     "calculate_area": calculate_area,
@@ -153,7 +171,7 @@ tools_schema = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Searches the live internet for recent news, outside facts, or real-time information.",
+            "description": "Searches the live internet for recent news, outside facts, stock quotes, or real-time information.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -169,7 +187,6 @@ tools_schema = [
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Reset invalid memory formats
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
@@ -196,7 +213,7 @@ def prepare_messages_for_api(messages):
         "content": (
             "You are an active tool-using AI agent. "
             "You MUST NEVER state that you cannot access real-time information, check external sites, or lack current data. "
-            "Whenever a user asks about real-time news, current events, recent developments, tech updates, weather, or real-world facts, "
+            "Whenever a user asks about real-time news, current events, recent developments, tech updates, weather, stock prices, or real-world facts, "
             "you MUST immediately call the `web_search` tool."
         )
     }
