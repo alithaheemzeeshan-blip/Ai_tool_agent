@@ -95,7 +95,6 @@ def check_inventory(item_name: str) -> str:
 
 def web_search(query: str) -> str:
     """Performs web search with yfinance fallback for stock tickers and query sanitization."""
-    # Check if query is asking for stock prices (e.g., AAPL, TSLA, MSFT)
     ticker_match = re.search(r'\b([A-Z]{1,5})\b', query)
     if any(k in query.lower() for k in ["stock", "price", "quote", "market cap"]):
         if ticker_match:
@@ -109,7 +108,6 @@ def web_search(query: str) -> str:
             except Exception:
                 pass
 
-    # Sanitize financial terms that trigger DuckDuckGo widget blocks
     clean_query = query.replace("today", "").replace("stock price", "stock news").strip()
     backends = ["auto", "html", "lite"]
     
@@ -171,7 +169,7 @@ tools_schema = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Searches the live internet for recent news, outside facts, stock quotes, or real-time information.",
+            "description": "Searches the live internet for recent news, gold prices, outside facts, or real-time information.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -206,15 +204,15 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Message Builder for Groq API
+# Strict Message Builder for Groq API payload compliance
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
         "content": (
             "You are an active tool-using AI agent. "
             "You MUST NEVER state that you cannot access real-time information, check external sites, or lack current data. "
-            "Whenever a user asks about real-time news, current events, recent developments, tech updates, weather, stock prices, or real-world facts, "
-            "you MUST immediately call the `web_search` tool."
+            "Whenever a user asks about real-time news, current events, recent developments, gold prices, weather, or facts, "
+            "you MUST call the `web_search` tool."
         )
     }
     cleaned = [system_instruction]
@@ -232,9 +230,12 @@ def prepare_messages_for_api(messages):
             msg_copy["content"] = str(m.get("content") or "")
 
         elif role == "assistant":
-            msg_copy["content"] = str(m.get("content") or "")
             if "tool_calls" in m and m["tool_calls"]:
                 msg_copy["tool_calls"] = m["tool_calls"]
+                if m.get("content"):
+                    msg_copy["content"] = str(m["content"])
+            else:
+                msg_copy["content"] = str(m.get("content") or "")
 
         elif role == "tool":
             msg_copy["content"] = str(m.get("content") or "")
@@ -253,25 +254,28 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Processing request..."):
             
-            # Iterative Agent Loop
             while True:
                 api_messages = prepare_messages_for_api(st.session_state.messages)
                 
-                response = client.chat.completions.create(
-                    model=ACTIVE_MODEL,
-                    messages=api_messages,
-                    tools=tools_schema,
-                    tool_choice="auto",
-                )
+                try:
+                    response = client.chat.completions.create(
+                        model=ACTIVE_MODEL,
+                        messages=api_messages,
+                        tools=tools_schema,
+                        tool_choice="auto",
+                    )
+                except Exception:
+                    response = client.chat.completions.create(
+                        model=ACTIVE_MODEL,
+                        messages=api_messages,
+                    )
 
                 response_message = response.choices[0].message
                 tool_calls = getattr(response_message, "tool_calls", None)
 
-                # Format assistant message
-                assistant_dict = {
-                    "role": "assistant",
-                    "content": response_message.content or ""
-                }
+                assistant_dict = {"role": "assistant"}
+                if response_message.content:
+                    assistant_dict["content"] = response_message.content
                 
                 if tool_calls:
                     assistant_dict["tool_calls"] = [
@@ -288,13 +292,11 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                 
                 st.session_state.messages.append(assistant_dict)
 
-                # If no tools called, display response and terminate loop
                 if not tool_calls:
-                    final_answer = response_message.content
+                    final_answer = response_message.content or "Task completed."
                     st.markdown(final_answer)
                     break
 
-                # Process Tool Calls
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
@@ -308,7 +310,6 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                         st.write("**Output:**", function_response)
                         status.update(label=f"✅ Tool `{function_name}` finished", state="complete", expanded=False)
 
-                    # Append validated tool response
                     st.session_state.messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
