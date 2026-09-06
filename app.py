@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_groq import ChatGroq
 
 # 1. Page Configuration & Custom CSS Styling
-st.set_page_config(page_title="AI Agent Studio", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Zeeshan Ai Agent", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -90,8 +90,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Title Banner
-st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption("Powered by Groq & LangChain • Capable of tool selection and multi-step reasoning")
+st.markdown('<div class="main-title">⚡ Ai Agent Tool</div>', unsafe_allow_html=True)
+st.caption("Powered by Groq & LangChain • Created By Zeeshan Thaheem")
 st.markdown("---")
 
 # Render Past Messages
