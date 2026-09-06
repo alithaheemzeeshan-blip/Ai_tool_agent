@@ -69,17 +69,16 @@ def get_active_model(key_str):
         models = client.models.list().data
         active_ids = [m.id for m in models if "whisper" not in m.id and "guard" not in m.id]
         priority = [
-            "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
             "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant"
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768"
         ]
         for p in priority:
             if p in active_ids:
                 return p
-        return active_ids[0] if active_ids else "openai/gpt-oss-120b"
+        return active_ids[0] if active_ids else "llama-3.3-70b-versatile"
     except Exception:
-        return "openai/gpt-oss-120b"
+        return "llama-3.3-70b-versatile"
 
 ACTIVE_MODEL = get_active_model(api_key)
 
@@ -96,9 +95,16 @@ def web_search(query: str) -> str:
     """Performs a live web search for outside information."""
     try:
         results = DDGS().text(query, max_results=3)
-        return json.dumps(results)
+        if not results:
+            return "No web results found for this query."
+        
+        # Format cleanly as plain text lines to avoid JSON syntax errors
+        clean_snippets = []
+        for r in results:
+            clean_snippets.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
+        return "\n\n".join(clean_snippets)
     except Exception as e:
-        return f"Web search error: {str(e)}"
+        return f"Web search tool encountered an issue: {str(e)}"
 
 available_tools = {
     "calculate_area": calculate_area,
@@ -175,18 +181,26 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
+# Strict Payload Sanitization Engine
 def prepare_messages_for_api(messages):
     cleaned = []
     for m in messages:
         if not isinstance(m, dict):
             continue
+        
         msg_copy = {"role": m["role"]}
-        if m.get("content") is not None:
-            msg_copy["content"] = str(m["content"])
-        if "tool_calls" in m and m["tool_calls"]:
+        
+        # Always provide string content
+        msg_copy["content"] = str(m.get("content") or "")
+            
+        # Preserve Tool Calls Structure for Assistant Role
+        if m["role"] == "assistant" and "tool_calls" in m and m["tool_calls"]:
             msg_copy["tool_calls"] = m["tool_calls"]
-        if "tool_call_id" in m:
-            msg_copy["tool_call_id"] = m["tool_call_id"]
+            
+        # Preserve Tool Output Attributes for Tool Role
+        if m["role"] == "tool":
+            msg_copy["tool_call_id"] = str(m.get("tool_call_id", ""))
+            
         cleaned.append(msg_copy)
     return cleaned
 
@@ -200,23 +214,20 @@ if prompt := st.chat_input("Assign a task to your agent..."):
         with st.spinner("Processing request..."):
             api_messages = prepare_messages_for_api(st.session_state.messages)
             
-            try:
-                response = client.chat.completions.create(
-                    model=ACTIVE_MODEL,
-                    messages=api_messages,
-                    tools=tools_schema,
-                    tool_choice="auto",
-                )
-            except Exception:
-                response = client.chat.completions.create(
-                    model=ACTIVE_MODEL,
-                    messages=api_messages,
-                )
+            response = client.chat.completions.create(
+                model=ACTIVE_MODEL,
+                messages=api_messages,
+                tools=tools_schema,
+                tool_choice="auto",
+            )
 
             response_message = response.choices[0].message
             tool_calls = getattr(response_message, "tool_calls", None)
 
-            assistant_dict = {"role": "assistant", "content": response_message.content}
+            assistant_dict = {
+                "role": "assistant",
+                "content": response_message.content or ""
+            }
             
             if tool_calls:
                 assistant_dict["tool_calls"] = [
@@ -250,15 +261,16 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                     st.session_state.messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": function_response,
+                        "content": str(function_response),
                     })
 
+                # Follow-Up Call with full tool execution history
                 api_messages = prepare_messages_for_api(st.session_state.messages)
                 second_response = client.chat.completions.create(
                     model=ACTIVE_MODEL,
                     messages=api_messages,
                 )
-                final_answer = second_response.choices[0].message.content
+                final_answer = second_response.choices[0].message.content or "Completed task."
                 st.markdown(final_answer)
                 st.session_state.messages.append({"role": "assistant", "content": final_answer})
             else:
