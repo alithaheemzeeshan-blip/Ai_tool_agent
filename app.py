@@ -95,10 +95,10 @@ def check_inventory(item_name: str) -> str:
     return f"Stock for {item_name}: {count} units available."
 
 def web_search(query: str) -> str:
-    """Performs web search with query sanitization, fallbacks, and yfinance support."""
-    # Stock ticker fallback
+    """Performs targeted web search with domain filtering and yfinance support."""
+    # 1. Stock ticker fallback
     ticker_match = re.search(r'\b([A-Z]{1,5})\b', query)
-    if any(k in query.lower() for k in ["stock", "price", "quote", "market cap"]):
+    if any(k in query.lower() for k in ["stock", "quote", "market cap"]):
         if ticker_match:
             symbol = ticker_match.group(1).upper()
             try:
@@ -110,29 +110,33 @@ def web_search(query: str) -> str:
             except Exception:
                 pass
 
-    # Extract core search keywords
-    clean_query = re.sub(r"(?i)\b(today'?s|price of|tell me|what is|search the web for|in pkr)\b", "", query)
-    clean_query = " ".join(clean_query.split()).strip()
-    
-    query_attempts = [clean_query, query, "gold rate pakistan 24k"]
+    # 2. Targeted query transformation for commodity queries
+    q_lower = query.lower()
+    if "gold" in q_lower:
+        search_term = "gold rate pakistan 24k tola per gram price"
+    else:
+        search_term = re.sub(r"(?i)\b(today'?s|price of|tell me|what is|search the web for)\b", "", query)
+        search_term = " ".join(search_term.split()).strip()
+
     backends = ["auto", "html", "lite"]
 
-    for q in query_attempts:
-        if not q:
+    for backend in backends:
+        try:
+            results = DDGS().text(keywords=search_term, max_results=5, backend=backend)
+            if results:
+                clean_snippets = []
+                for r in results:
+                    title = r.get('title', '')
+                    body = r.get('body', '')
+                    # Filter out irrelevant domain aggregators matching the 'price' prefix
+                    if not any(domain in title.lower() for domain in ["priceline", "price.com", "price industries"]):
+                        clean_snippets.append(f"Title: {title}\nSnippet: {body}")
+                if clean_snippets:
+                    return "\n\n".join(clean_snippets[:3])
+        except Exception:
             continue
-        for backend in backends:
-            try:
-                results = DDGS().text(keywords=q, max_results=3, backend=backend)
-                if results:
-                    clean_snippets = [
-                        f"Title: {r.get('title')}\nSnippet: {r.get('body')}" 
-                        for r in results
-                    ]
-                    return "\n\n".join(clean_snippets)
-            except Exception:
-                continue
 
-    return f"No web results found for query: '{query}'."
+    return f"No relevant web results found for query: '{query}'."
 
 available_tools = {
     "calculate_area": calculate_area,
