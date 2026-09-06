@@ -3,7 +3,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
 
-# 1. Page Configuration & Custom CSS
+# 1. Page Configuration & Styling
 st.set_page_config(page_title="AI Agent Studio", page_icon="⚡", layout="wide")
 
 st.markdown("""
@@ -41,7 +41,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. Sidebar Setup & Key Management
+# 2. Sidebar & Key Setup
 with st.sidebar:
     st.image("https://groq.com/wp-content/uploads/2024/03/PBG-mark-orange.svg", width=50)
     st.title("Control Panel")
@@ -55,15 +55,13 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # Clear History Action
     if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
         st.rerun()
 
-# Initialize Groq Client
 client = Groq(api_key=api_key)
 
-# 3. Local Python Tool Definitions & Implementations
+# 3. Tool Definitions
 def calculate_area(length: float, width: float) -> str:
     return str(float(length) * float(width))
 
@@ -72,13 +70,11 @@ def check_inventory(item_name: str) -> str:
     count = inventory.get(item_name.lower(), 0)
     return f"Stock for {item_name}: {count} units available."
 
-# Map Tool Names to Functions
 available_tools = {
     "calculate_area": calculate_area,
     "check_inventory": check_inventory,
 }
 
-# Groq Tool Specifications Schema
 tools_schema = [
     {
         "type": "function",
@@ -111,35 +107,40 @@ tools_schema = [
     },
 ]
 
-# 4. State Initialization & UI Header
+# 4. Initialize Session State & Handle Legacy State Cleaning
 if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Validate structure to prevent TypeError from old session objects
+if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
 st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
 st.caption("Powered by Groq Native SDK • Features auto-scroll, history control & local tool execution")
 st.markdown("---")
 
-# Render Past Conversation History
+# Render Messages safely
 for msg in st.session_state.messages:
-    if msg["role"] == "user":
-        with st.chat_message("user", avatar="👤"):
-            st.markdown(msg["content"])
-    elif msg["role"] == "assistant" and msg.get("content"):
-        with st.chat_message("assistant", avatar="🤖"):
-            st.markdown(msg["content"])
+    if isinstance(msg, dict):
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "user":
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(content)
+        elif role == "assistant" and content:
+            with st.chat_message("assistant", avatar="🤖"):
+                st.markdown(content)
 
-# 5. User Execution Loop
+# 5. Chat & Tool Execution
 if prompt := st.chat_input("Assign a task to your agent..."):
-    # Append User Input
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Processing request..."):
-            # Initial Groq API Call
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",  # Active & high limit model endpoint
+                model="llama-3.1-8b-instant",
                 messages=st.session_state.messages,
                 tools=tools_schema,
                 tool_choice="auto",
@@ -148,10 +149,9 @@ if prompt := st.chat_input("Assign a task to your agent..."):
             response_message = response.choices[0].message
             tool_calls = response_message.tool_calls
 
-            # Store assistant response into message state
+            # Store assistant response dictionary safely
             st.session_state.messages.append(response_message.model_dump())
 
-            # Evaluate Tool Calls
             if tool_calls:
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
@@ -160,14 +160,12 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                     with st.status(f"🛠️ Tool Called: `{function_name}`", expanded=True) as status:
                         st.write("**Parameters:**", function_args)
                         
-                        # Execute Tool Function
                         function_to_call = available_tools[function_name]
                         function_response = function_to_call(**function_args)
                         
                         st.write("**Output:**", function_response)
                         status.update(label=f"✅ Tool `{function_name}` executed", state="complete", expanded=False)
 
-                    # Append Tool Result Message
                     st.session_state.messages.append({
                         "tool_call_id": tool_call.id,
                         "role": "tool",
@@ -175,7 +173,6 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                         "content": function_response,
                     })
 
-                # Follow-Up Call to Synthesize Tool Output
                 second_response = client.chat.completions.create(
                     model="llama-3.1-8b-instant",
                     messages=st.session_state.messages,
@@ -187,7 +184,7 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                 final_answer = response_message.content
                 st.markdown(final_answer)
 
-    # 6. JavaScript Auto-Scroll
+    # Auto-Scroll View
     components.html(
         """
         <script>
