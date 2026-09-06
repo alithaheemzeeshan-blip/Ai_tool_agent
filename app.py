@@ -53,9 +53,9 @@ if prompt := st.chat_input("Assign a task to the agent..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Initialize Model & Bind Tools
+    # Initialize Model with valid supported model name
     llm = ChatGroq(
-        model_name="llama-3.3-70b-versatile",
+        model_name="openai/gpt-oss-120b",  # Alternatively use "llama-3.3-70b-versatile"
         groq_api_key=api_key,
         temperature=0
     )
