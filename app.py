@@ -180,11 +180,16 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Message Sanitizer ensuring system instruction and Groq API compliance
+# Strict Message Sanitizer with Anti-Refusal System Prompt
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
-        "content": "You are an up-to-date AI agent. Always call the `web_search` tool whenever a user asks for current events, news, recent updates, real-time factual questions, or weather information."
+        "content": (
+            "You are an active tool-using AI agent. "
+            "You MUST NEVER state that you cannot access real-time information, check external sites, or lack current data. "
+            "Whenever a user asks about real-time news, current events, recent developments, tech updates, weather, or real-world facts, "
+            "you MUST immediately invoke the `web_search` tool to retrieve live data before generating an answer."
+        )
     }
     cleaned = [system_instruction]
     for m in messages:
