@@ -92,18 +92,26 @@ def check_inventory(item_name: str) -> str:
     return f"Stock for {item_name}: {count} units available."
 
 def web_search(query: str) -> str:
-    """Performs a live web search for outside information."""
-    try:
-        results = DDGS().text(query, max_results=3)
-        if not results:
-            return "No web results found for this query."
-        
-        clean_snippets = []
-        for r in results:
-            clean_snippets.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
-        return "\n\n".join(clean_snippets)
-    except Exception as e:
-        return f"Web search tool encountered an issue: {str(e)}"
+    """Performs a robust live web search using backend fallbacks."""
+    backends = ["auto", "html", "lite"]
+    
+    for backend in backends:
+        try:
+            results = DDGS().text(
+                keywords=query, 
+                max_results=3, 
+                backend=backend
+            )
+            if results:
+                clean_snippets = [
+                    f"Title: {r.get('title')}\nSnippet: {r.get('body')}" 
+                    for r in results
+                ]
+                return "\n\n".join(clean_snippets)
+        except Exception:
+            continue
+            
+    return "No web results found for this query."
 
 available_tools = {
     "calculate_area": calculate_area,
