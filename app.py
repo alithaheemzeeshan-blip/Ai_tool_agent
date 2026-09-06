@@ -41,7 +41,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. Sidebar & Key Setup
+# 2. Sidebar Setup & Key Management
 with st.sidebar:
     st.image("https://groq.com/wp-content/uploads/2024/03/PBG-mark-orange.svg", width=50)
     st.title("Control Panel")
@@ -60,32 +60,6 @@ with st.sidebar:
         st.rerun()
 
 client = Groq(api_key=api_key)
-
-# Fetch active models dynamically from your key to avoid NotFoundError
-@st.cache_data(ttl=3600)
-def get_available_model(api_key_str):
-    try:
-        models_list = client.models.list()
-        active_ids = [m.id for m in models_list.data]
-        
-        # Priority order for tool-calling capable models
-        candidates = [
-            "llama-3.3-70b-versatile",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "mixtral-8x7b-32768",
-            "llama-3.1-8b-instant"
-        ]
-        
-        for candidate in candidates:
-            if candidate in active_ids:
-                return candidate
-                
-        return active_ids[0] if active_ids else "llama-3.3-70b-versatile"
-    except Exception:
-        return "llama-3.3-70b-versatile"
-
-SELECTED_MODEL = get_available_model(api_key)
 
 # 3. Tool Definitions
 def calculate_area(length: float, width: float) -> str:
@@ -133,18 +107,19 @@ tools_schema = [
     },
 ]
 
-# 4. Initialize Session State & Handle Legacy State Cleaning
+# 4. State Initialization
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Reset state if corrupted history detected
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
 st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption(f"Powered by Groq Native SDK (`{SELECTED_MODEL}`) • Features auto-scroll, history control & local tool execution")
+st.caption("Powered by Groq Native SDK (`llama-3.3-70b-versatile`) • Features auto-scroll, history control & local tool execution")
 st.markdown("---")
 
-# Render Messages safely
+# Render Past Messages
 for msg in st.session_state.messages:
     if isinstance(msg, dict):
         role = msg.get("role")
@@ -156,7 +131,23 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# 5. Chat & Tool Execution
+# Helper function to sanitize message dictionaries for API calls
+def prepare_messages_for_api(messages):
+    cleaned = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        msg_copy = {"role": m["role"]}
+        if m.get("content") is not None:
+            msg_copy["content"] = str(m["content"])
+        if "tool_calls" in m and m["tool_calls"]:
+            msg_copy["tool_calls"] = m["tool_calls"]
+        if "tool_call_id" in m:
+            msg_copy["tool_call_id"] = m["tool_call_id"]
+        cleaned.append(msg_copy)
+    return cleaned
+
+# 5. User Interaction
 if prompt := st.chat_input("Assign a task to your agent..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
@@ -164,9 +155,11 @@ if prompt := st.chat_input("Assign a task to your agent..."):
 
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Processing request..."):
+            api_messages = prepare_messages_for_api(st.session_state.messages)
+            
             response = client.chat.completions.create(
-                model=SELECTED_MODEL,
-                messages=st.session_state.messages,
+                model="llama-3.3-70b-versatile",
+                messages=api_messages,
                 tools=tools_schema,
                 tool_choice="auto",
             )
@@ -174,8 +167,25 @@ if prompt := st.chat_input("Assign a task to your agent..."):
             response_message = response.choices[0].message
             tool_calls = response_message.tool_calls
 
-            st.session_state.messages.append(response_message.model_dump())
+            # Convert message safely to a clean dict
+            assistant_dict = {"role": "assistant", "content": response_message.content}
+            
+            if tool_calls:
+                assistant_dict["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    }
+                    for tc in tool_calls
+                ]
+            
+            st.session_state.messages.append(assistant_dict)
 
+            # Process Tool Calls
             if tool_calls:
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
@@ -191,15 +201,16 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                         status.update(label=f"✅ Tool `{function_name}` executed", state="complete", expanded=False)
 
                     st.session_state.messages.append({
-                        "tool_call_id": tool_call.id,
                         "role": "tool",
-                        "name": function_name,
+                        "tool_call_id": tool_call.id,
                         "content": function_response,
                     })
 
+                # Follow-Up Call
+                api_messages = prepare_messages_for_api(st.session_state.messages)
                 second_response = client.chat.completions.create(
-                    model=SELECTED_MODEL,
-                    messages=st.session_state.messages,
+                    model="llama-3.3-70b-versatile",
+                    messages=api_messages,
                 )
                 final_answer = second_response.choices[0].message.content
                 st.markdown(final_answer)
@@ -208,7 +219,7 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                 final_answer = response_message.content
                 st.markdown(final_answer)
 
-    # Auto-Scroll View
+    # Auto-Scroll
     components.html(
         """
         <script>
