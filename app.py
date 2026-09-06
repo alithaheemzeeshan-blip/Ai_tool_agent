@@ -61,6 +61,30 @@ with st.sidebar:
 
 client = Groq(api_key=api_key)
 
+# Dynamic active model retriever to permanently avoid NotFoundError
+@st.cache_data(ttl=1800)
+def get_active_model(key_str):
+    try:
+        models = client.models.list().data
+        active_ids = [m.id for m in models if "whisper" not in m.id and "guard" not in m.id]
+        
+        # Priority order for production chat/tool models
+        priority = [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant"
+        ]
+        
+        for p in priority:
+            if p in active_ids:
+                return p
+        return active_ids[0] if active_ids else "openai/gpt-oss-120b"
+    except Exception:
+        return "openai/gpt-oss-120b"
+
+ACTIVE_MODEL = get_active_model(api_key)
+
 # 3. Tool Definitions
 def calculate_area(length: float, width: float) -> str:
     return str(float(length) * float(width))
@@ -115,10 +139,10 @@ if st.session_state.messages and not isinstance(st.session_state.messages[0], di
     st.session_state.messages = []
 
 st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption("Powered by Groq Native SDK • Features auto-scroll, history control & local tool execution")
+st.caption(f"Powered by Groq Cloud (`{ACTIVE_MODEL}`) • Features auto-scroll, history control & local tool execution")
 st.markdown("---")
 
-# Render Past Messages
+# Render Messages Safely
 for msg in st.session_state.messages:
     if isinstance(msg, dict):
         role = msg.get("role")
@@ -145,22 +169,6 @@ def prepare_messages_for_api(messages):
         cleaned.append(msg_copy)
     return cleaned
 
-# Helper to execute chat completion with fallback models
-def get_groq_completion(messages_payload, tools=None):
-    models = ["llama-3.1-8b-instant", "mixtral-8x7b-32768", "llama-3.3-70b-versatile"]
-    for model in models:
-        try:
-            kwargs = {"model": model, "messages": messages_payload}
-            if tools:
-                kwargs["tools"] = tools
-                kwargs["tool_choice"] = "auto"
-            return client.chat.completions.create(**kwargs)
-        except Exception as e:
-            if "NotFoundError" in str(type(e)):
-                continue
-            raise e
-    raise Exception("No active model endpoints found for your Groq API key.")
-
 # 5. User Interaction
 if prompt := st.chat_input("Assign a task to your agent..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -171,10 +179,22 @@ if prompt := st.chat_input("Assign a task to your agent..."):
         with st.spinner("Processing request..."):
             api_messages = prepare_messages_for_api(st.session_state.messages)
             
-            response = get_groq_completion(api_messages, tools=tools_schema)
+            # Request completion with tool calling schema fallback
+            try:
+                response = client.chat.completions.create(
+                    model=ACTIVE_MODEL,
+                    messages=api_messages,
+                    tools=tools_schema,
+                    tool_choice="auto",
+                )
+            except Exception:
+                response = client.chat.completions.create(
+                    model=ACTIVE_MODEL,
+                    messages=api_messages,
+                )
 
             response_message = response.choices[0].message
-            tool_calls = response_message.tool_calls
+            tool_calls = getattr(response_message, "tool_calls", None)
 
             assistant_dict = {"role": "assistant", "content": response_message.content}
             
@@ -214,7 +234,10 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                     })
 
                 api_messages = prepare_messages_for_api(st.session_state.messages)
-                second_response = get_groq_completion(api_messages)
+                second_response = client.chat.completions.create(
+                    model=ACTIVE_MODEL,
+                    messages=api_messages,
+                )
                 final_answer = second_response.choices[0].message.content
                 st.markdown(final_answer)
                 st.session_state.messages.append({"role": "assistant", "content": final_answer})
@@ -222,7 +245,7 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                 final_answer = response_message.content
                 st.markdown(final_answer)
 
-    # Auto-Scroll
+    # Auto-Scroll View
     components.html(
         """
         <script>
