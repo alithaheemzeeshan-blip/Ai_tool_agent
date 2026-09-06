@@ -3,7 +3,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
 
-# 1. Page Configuration & Styling
+# 1. Page Configuration & Custom CSS
 st.set_page_config(page_title="AI Agent Studio", page_icon="⚡", layout="wide")
 
 st.markdown("""
@@ -61,6 +61,32 @@ with st.sidebar:
 
 client = Groq(api_key=api_key)
 
+# Fetch active models dynamically from your key to avoid NotFoundError
+@st.cache_data(ttl=3600)
+def get_available_model(api_key_str):
+    try:
+        models_list = client.models.list()
+        active_ids = [m.id for m in models_list.data]
+        
+        # Priority order for tool-calling capable models
+        candidates = [
+            "llama-3.3-70b-versatile",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "llama-3.1-8b-instant"
+        ]
+        
+        for candidate in candidates:
+            if candidate in active_ids:
+                return candidate
+                
+        return active_ids[0] if active_ids else "llama-3.3-70b-versatile"
+    except Exception:
+        return "llama-3.3-70b-versatile"
+
+SELECTED_MODEL = get_available_model(api_key)
+
 # 3. Tool Definitions
 def calculate_area(length: float, width: float) -> str:
     return str(float(length) * float(width))
@@ -111,12 +137,11 @@ tools_schema = [
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Validate structure to prevent TypeError from old session objects
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
 st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption("Powered by Groq Native SDK • Features auto-scroll, history control & local tool execution")
+st.caption(f"Powered by Groq Native SDK (`{SELECTED_MODEL}`) • Features auto-scroll, history control & local tool execution")
 st.markdown("---")
 
 # Render Messages safely
@@ -140,7 +165,7 @@ if prompt := st.chat_input("Assign a task to your agent..."):
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Processing request..."):
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=SELECTED_MODEL,
                 messages=st.session_state.messages,
                 tools=tools_schema,
                 tool_choice="auto",
@@ -149,7 +174,6 @@ if prompt := st.chat_input("Assign a task to your agent..."):
             response_message = response.choices[0].message
             tool_calls = response_message.tool_calls
 
-            # Store assistant response dictionary safely
             st.session_state.messages.append(response_message.model_dump())
 
             if tool_calls:
@@ -174,7 +198,7 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                     })
 
                 second_response = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
+                    model=SELECTED_MODEL,
                     messages=st.session_state.messages,
                 )
                 final_answer = second_response.choices[0].message.content
