@@ -161,12 +161,11 @@ tools_schema = [
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Reset corrupted state structures
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
-st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption(f"Powered by Groq Cloud (`{ACTIVE_MODEL}`) • Web Search, Inventory & Math Enabled")
+st.markdown('<div class="main-title">⚡ Real-Time AI Agent Studio</div>', unsafe_allow_html=True)
+st.caption(f"Powered by Groq Cloud (`{ACTIVE_MODEL}`) • Live Web Search Enabled")
 st.markdown("---")
 
 # Render Messages Safely
@@ -181,41 +180,41 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Message Sanitizer ensuring Groq API compliance
+# Message Sanitizer ensuring system instruction and Groq API compliance
 def prepare_messages_for_api(messages):
-    cleaned = []
+    system_instruction = {
+        "role": "system",
+        "content": "You are an up-to-date AI agent. Always call the `web_search` tool whenever a user asks for current events, news, recent updates, real-time factual questions, or weather information."
+    }
+    cleaned = [system_instruction]
     for m in messages:
         if not isinstance(m, dict):
             continue
         
         role = m.get("role")
-        if role not in ["user", "assistant", "tool", "system"]:
+        if role not in ["user", "assistant", "tool"]:
             continue
 
         msg_copy = {"role": role}
-        
-        # Ensure content is always string or empty string
         msg_copy["content"] = str(m.get("content") or "")
 
-        # Pass through tool_calls for assistant
         if role == "assistant" and "tool_calls" in m and m["tool_calls"]:
             msg_copy["tool_calls"] = m["tool_calls"]
 
-        # Pass through tool execution metadata for tool role
         if role == "tool":
             msg_copy["tool_call_id"] = str(m.get("tool_call_id", ""))
 
         cleaned.append(msg_copy)
     return cleaned
 
-# 5. User Interaction
-if prompt := st.chat_input("Assign a task to your agent..."):
+# 5. User Interaction Loop
+if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="🤖"):
-        with st.spinner("Processing request..."):
+        with st.spinner("Searching and processing request..."):
             api_messages = prepare_messages_for_api(st.session_state.messages)
             
             try:
@@ -286,7 +285,7 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                 final_answer = response_message.content
                 st.markdown(final_answer)
 
-    # Auto-Scroll
+    # Auto-Scroll View
     components.html(
         """
         <script>
