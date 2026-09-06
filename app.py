@@ -2,8 +2,9 @@ import json
 import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
+from duckduckgo_search import DDGS
 
-# 1. Page Configuration & Custom CSS
+# 1. Page Configuration & Custom Styling
 st.set_page_config(page_title="AI Agent Studio", page_icon="⚡", layout="wide")
 
 st.markdown("""
@@ -61,21 +62,18 @@ with st.sidebar:
 
 client = Groq(api_key=api_key)
 
-# Dynamic active model retriever to permanently avoid NotFoundError
+# Dynamic active model retriever
 @st.cache_data(ttl=1800)
 def get_active_model(key_str):
     try:
         models = client.models.list().data
         active_ids = [m.id for m in models if "whisper" not in m.id and "guard" not in m.id]
-        
-        # Priority order for production chat/tool models
         priority = [
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant"
         ]
-        
         for p in priority:
             if p in active_ids:
                 return p
@@ -85,7 +83,7 @@ def get_active_model(key_str):
 
 ACTIVE_MODEL = get_active_model(api_key)
 
-# 3. Tool Definitions
+# 3. Tool Implementations
 def calculate_area(length: float, width: float) -> str:
     return str(float(length) * float(width))
 
@@ -94,9 +92,18 @@ def check_inventory(item_name: str) -> str:
     count = inventory.get(item_name.lower(), 0)
     return f"Stock for {item_name}: {count} units available."
 
+def web_search(query: str) -> str:
+    """Performs a live web search for outside information."""
+    try:
+        results = DDGS().text(query, max_results=3)
+        return json.dumps(results)
+    except Exception as e:
+        return f"Web search error: {str(e)}"
+
 available_tools = {
     "calculate_area": calculate_area,
     "check_inventory": check_inventory,
+    "web_search": web_search,
 }
 
 tools_schema = [
@@ -129,6 +136,20 @@ tools_schema = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Searches the live internet for recent news, outside facts, or real-time information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query terms"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # 4. State Initialization
@@ -139,7 +160,7 @@ if st.session_state.messages and not isinstance(st.session_state.messages[0], di
     st.session_state.messages = []
 
 st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption(f"Powered by Groq Cloud (`{ACTIVE_MODEL}`) • Features auto-scroll, history control & local tool execution")
+st.caption(f"Powered by Groq Cloud (`{ACTIVE_MODEL}`) • Web Search, Inventory & Math Enabled")
 st.markdown("---")
 
 # Render Messages Safely
@@ -179,7 +200,6 @@ if prompt := st.chat_input("Assign a task to your agent..."):
         with st.spinner("Processing request..."):
             api_messages = prepare_messages_for_api(st.session_state.messages)
             
-            # Request completion with tool calling schema fallback
             try:
                 response = client.chat.completions.create(
                     model=ACTIVE_MODEL,
