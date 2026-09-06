@@ -245,6 +245,17 @@ def prepare_messages_for_api(messages):
         cleaned.append(msg_copy)
     return cleaned
 
+# Helper to generate a clean text-only payload for fallback completion
+def prepare_fallback_messages(messages):
+    fallback_cleaned = []
+    for m in prepare_messages_for_api(messages):
+        # Exclude tool messages that cause errors when tools parameter is omitted
+        if m.get("role") == "tool":
+            continue
+        msg_copy = {"role": m["role"], "content": m.get("content", "") or "Processing request..."}
+        fallback_cleaned.append(msg_copy)
+    return fallback_cleaned
+
 # 5. User Interaction & Tool Execution Loop
 if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -265,9 +276,11 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                         tool_choice="auto",
                     )
                 except Exception:
+                    # Clean fallback payload stripping tool roles and tool_calls
+                    fallback_msgs = prepare_fallback_messages(st.session_state.messages)
                     response = client.chat.completions.create(
                         model=ACTIVE_MODEL,
-                        messages=api_messages,
+                        messages=fallback_msgs,
                     )
 
                 response_message = response.choices[0].message
