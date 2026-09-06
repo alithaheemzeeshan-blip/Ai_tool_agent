@@ -161,6 +161,7 @@ tools_schema = [
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Reset invalid memory formats
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
@@ -180,7 +181,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Message Sanitizer with Anti-Refusal System Prompt
+# Strict Message Builder for Groq API
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
@@ -188,7 +189,7 @@ def prepare_messages_for_api(messages):
             "You are an active tool-using AI agent. "
             "You MUST NEVER state that you cannot access real-time information, check external sites, or lack current data. "
             "Whenever a user asks about real-time news, current events, recent developments, tech updates, weather, or real-world facts, "
-            "you MUST immediately invoke the `web_search` tool to retrieve live data before generating an answer."
+            "you MUST immediately call the `web_search` tool."
         )
     }
     cleaned = [system_instruction]
@@ -201,94 +202,94 @@ def prepare_messages_for_api(messages):
             continue
 
         msg_copy = {"role": role}
-        msg_copy["content"] = str(m.get("content") or "")
 
-        if role == "assistant" and "tool_calls" in m and m["tool_calls"]:
-            msg_copy["tool_calls"] = m["tool_calls"]
+        if role == "user":
+            msg_copy["content"] = str(m.get("content") or "")
 
-        if role == "tool":
+        elif role == "assistant":
+            msg_copy["content"] = str(m.get("content") or "")
+            if "tool_calls" in m and m["tool_calls"]:
+                msg_copy["tool_calls"] = m["tool_calls"]
+
+        elif role == "tool":
+            msg_copy["content"] = str(m.get("content") or "")
             msg_copy["tool_call_id"] = str(m.get("tool_call_id", ""))
+            msg_copy["name"] = str(m.get("name", ""))
 
         cleaned.append(msg_copy)
     return cleaned
 
-# 5. User Interaction Loop
+# 5. User Interaction & Tool Execution Loop
 if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="🤖"):
-        with st.spinner("Searching and processing request..."):
-            api_messages = prepare_messages_for_api(st.session_state.messages)
+        with st.spinner("Processing request..."):
             
-            try:
+            # Iterative Agent Loop
+            while True:
+                api_messages = prepare_messages_for_api(st.session_state.messages)
+                
                 response = client.chat.completions.create(
                     model=ACTIVE_MODEL,
                     messages=api_messages,
                     tools=tools_schema,
                     tool_choice="auto",
                 )
-            except Exception:
-                response = client.chat.completions.create(
-                    model=ACTIVE_MODEL,
-                    messages=api_messages,
-                )
 
-            response_message = response.choices[0].message
-            tool_calls = getattr(response_message, "tool_calls", None)
+                response_message = response.choices[0].message
+                tool_calls = getattr(response_message, "tool_calls", None)
 
-            assistant_dict = {
-                "role": "assistant",
-                "content": response_message.content or ""
-            }
-            
-            if tool_calls:
-                assistant_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
+                # Format assistant message
+                assistant_dict = {
+                    "role": "assistant",
+                    "content": response_message.content or ""
+                }
+                
+                if tool_calls:
+                    assistant_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
                         }
-                    }
-                    for tc in tool_calls
-                ]
-            
-            st.session_state.messages.append(assistant_dict)
+                        for tc in tool_calls
+                    ]
+                
+                st.session_state.messages.append(assistant_dict)
 
-            if tool_calls:
+                # If no tools called, display response and terminate loop
+                if not tool_calls:
+                    final_answer = response_message.content
+                    st.markdown(final_answer)
+                    break
+
+                # Process Tool Calls
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
                     
-                    with st.status(f"🛠️ Tool Called: `{function_name}`", expanded=True) as status:
+                    with st.status(f"🛠️ Executing Tool: `{function_name}`", expanded=True) as status:
                         st.write("**Parameters:**", function_args)
                         
                         function_to_call = available_tools[function_name]
                         function_response = function_to_call(**function_args)
                         
                         st.write("**Output:**", function_response)
-                        status.update(label=f"✅ Tool `{function_name}` executed", state="complete", expanded=False)
+                        status.update(label=f"✅ Tool `{function_name}` finished", state="complete", expanded=False)
 
+                    # Append validated tool response
                     st.session_state.messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
+                        "name": function_name,
                         "content": str(function_response),
                     })
-
-                api_messages = prepare_messages_for_api(st.session_state.messages)
-                second_response = client.chat.completions.create(
-                    model=ACTIVE_MODEL,
-                    messages=api_messages,
-                )
-                final_answer = second_response.choices[0].message.content or "Task completed."
-                st.markdown(final_answer)
-                st.session_state.messages.append({"role": "assistant", "content": final_answer})
-            else:
-                final_answer = response_message.content
-                st.markdown(final_answer)
 
     # Auto-Scroll View
     components.html(
