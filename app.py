@@ -204,7 +204,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Strict Message Sanitizer for Groq API
+# Strict Message Builder enforcing valid tool-calling history chains
 def prepare_messages_for_api(messages):
     system_instruction = {
         "role": "system",
@@ -245,7 +245,7 @@ def prepare_messages_for_api(messages):
         cleaned.append(msg_copy)
     return cleaned
 
-# Fallback Payload Builder (Pure Text-Only Mode)
+# Fallback Payload Builder (Purger for non-tool completion requests)
 def prepare_fallback_messages(messages):
     fallback_cleaned = []
     for m in messages:
@@ -253,15 +253,15 @@ def prepare_fallback_messages(messages):
             continue
         role = m.get("role")
         if role in ["user", "assistant"]:
-            content_str = str(m.get("content") or "")
-            if content_str.strip():
+            content_str = str(m.get("content") or "").strip()
+            if content_str:
                 fallback_cleaned.append({
                     "role": role,
                     "content": content_str
                 })
     return fallback_cleaned
 
-# 5. User Interaction & Multi-Turn Tool Loop
+# 5. User Interaction & Execution Loop
 if prompt := st.chat_input("Ask a real-time question or assign a task..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="👤"):
@@ -281,7 +281,7 @@ if prompt := st.chat_input("Ask a real-time question or assign a task..."):
                         tool_choice="auto",
                     )
                 except Exception:
-                    # Pure text fallback if tool schema completion fails
+                    # Fallback cleanly strips tool payloads if tool call fails
                     fallback_msgs = prepare_fallback_messages(st.session_state.messages)
                     response = client.chat.completions.create(
                         model=ACTIVE_MODEL,
