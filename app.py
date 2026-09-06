@@ -111,12 +111,11 @@ tools_schema = [
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Reset state if corrupted history detected
 if st.session_state.messages and not isinstance(st.session_state.messages[0], dict):
     st.session_state.messages = []
 
 st.markdown('<div class="main-title">⚡ AI Tool Agent Studio</div>', unsafe_allow_html=True)
-st.caption("Powered by Groq Native SDK (`llama-3.3-70b-versatile`) • Features auto-scroll, history control & local tool execution")
+st.caption("Powered by Groq Native SDK • Features auto-scroll, history control & local tool execution")
 st.markdown("---")
 
 # Render Past Messages
@@ -131,7 +130,6 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(content)
 
-# Helper function to sanitize message dictionaries for API calls
 def prepare_messages_for_api(messages):
     cleaned = []
     for m in messages:
@@ -147,6 +145,22 @@ def prepare_messages_for_api(messages):
         cleaned.append(msg_copy)
     return cleaned
 
+# Helper to execute chat completion with fallback models
+def get_groq_completion(messages_payload, tools=None):
+    models = ["llama-3.1-8b-instant", "mixtral-8x7b-32768", "llama-3.3-70b-versatile"]
+    for model in models:
+        try:
+            kwargs = {"model": model, "messages": messages_payload}
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+            return client.chat.completions.create(**kwargs)
+        except Exception as e:
+            if "NotFoundError" in str(type(e)):
+                continue
+            raise e
+    raise Exception("No active model endpoints found for your Groq API key.")
+
 # 5. User Interaction
 if prompt := st.chat_input("Assign a task to your agent..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -157,17 +171,11 @@ if prompt := st.chat_input("Assign a task to your agent..."):
         with st.spinner("Processing request..."):
             api_messages = prepare_messages_for_api(st.session_state.messages)
             
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=api_messages,
-                tools=tools_schema,
-                tool_choice="auto",
-            )
+            response = get_groq_completion(api_messages, tools=tools_schema)
 
             response_message = response.choices[0].message
             tool_calls = response_message.tool_calls
 
-            # Convert message safely to a clean dict
             assistant_dict = {"role": "assistant", "content": response_message.content}
             
             if tool_calls:
@@ -185,7 +193,6 @@ if prompt := st.chat_input("Assign a task to your agent..."):
             
             st.session_state.messages.append(assistant_dict)
 
-            # Process Tool Calls
             if tool_calls:
                 for tool_call in tool_calls:
                     function_name = tool_call.function.name
@@ -206,12 +213,8 @@ if prompt := st.chat_input("Assign a task to your agent..."):
                         "content": function_response,
                     })
 
-                # Follow-Up Call
                 api_messages = prepare_messages_for_api(st.session_state.messages)
-                second_response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=api_messages,
-                )
+                second_response = get_groq_completion(api_messages)
                 final_answer = second_response.choices[0].message.content
                 st.markdown(final_answer)
                 st.session_state.messages.append({"role": "assistant", "content": final_answer})
